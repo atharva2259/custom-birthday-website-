@@ -1,6 +1,6 @@
 {
   "name": "Birthday Celebration & Memory Book",
-  "description": "A customizable, aesthetic birthday celebration website with photo galleries, offline memories, countdown timer, interactive cake cutting, balloon popping, confetti, and ambient music player.",
+  "description": "A customizable, aesthetic birthday celebration website with tactile wax-sealed birthday wish letter, photo galleries, offline memories, countdown timer, interactive cake cutting, balloon popping, and ambient music player.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

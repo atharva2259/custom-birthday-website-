@@ -14,6 +14,7 @@ import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { CountdownTimer } from './components/CountdownTimer';
 import { InteractiveCake } from './components/InteractiveCake';
+import { BirthdayWishLetter } from './components/BirthdayWishLetter';
 import { BalloonOverlay } from './components/BalloonOverlay';
 import { PhotoGallery } from './components/PhotoGallery';
 import { SocialShareModal } from './components/SocialShareModal';
@@ -225,7 +226,10 @@ export default function App() {
           onCakeCut={() => spawnBalloons(20)}
         />
 
-        {/* 5. Photo Memories & Gallery with Offline Mode */}
+        {/* 5. Aesthetic Birthday Wish Letter (Handwritten Keepsake) */}
+        <BirthdayWishLetter config={config} theme={activeTheme} />
+
+        {/* 6. Photo Memories & Gallery with Offline Mode */}
         <PhotoGallery
           photos={photos}
           theme={activeTheme}

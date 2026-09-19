@@ -75,6 +75,16 @@ export const DEFAULT_EVENT_CONFIG: BirthdayEventConfig = {
   dressCode: 'Soft Neutrals, Linen, & Earthy Tones',
   theme: 'warm-oat',
   coverPhotoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=1200&q=80',
+  letterSalutation: 'Dearest Sophia,',
+  letterBody: `On this sunlit day marking another beautiful revolution around the sun, we pause the rush of the world to celebrate the quiet poetry and luminous light that is you.
+
+Over this past year, watching you move through life with such resilient grace, boundless kindness, and steady courage has been an absolute wonder. You possess that rare and timeless gift of making every space you step into softer, brighter, and infinitely more welcoming. Whether it’s sharing quiet cups of morning coffee, laughing until tears spill over, or having conversations that stretch late into starry evenings, moments with you are treasures we keep closest to our hearts.
+
+As you step into your 28th chapter, our wish for you is simple yet profound: may you continue to trust the rhythm of your own heart. May this year shower you with bold artistic adventures, unhurried mornings, genuine deep connections, and peace in knowing just how deeply, irrevocably loved and valued you are.
+
+Blow out your candles today with fierce intention. Every dream you whisper into the smoke has already begun its gentle journey back to you.`,
+  letterSignoff: 'With all our love and infinite admiration,',
+  letterAuthor: 'Your Cherished Family & Lifelong Friends',
   registryVenmo: '@SophiaVance-celebrate',
   registryPaypal: 'paypal.me/sophiavance',
   registryCashapp: '$SophiaVance',

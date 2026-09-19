@@ -25,10 +25,23 @@ export interface BirthdayEventConfig {
   dressCode: string;
   theme: ColorThemeId;
   coverPhotoUrl: string;
+  letterSalutation?: string;
+  letterBody?: string;
+  letterSignoff?: string;
+  letterAuthor?: string;
   registryVenmo?: string;
   registryPaypal?: string;
   registryCashapp?: string;
   registryAmazonUrl?: string;
+}
+
+export interface LetterWishNote {
+  id: string;
+  senderName: string;
+  relation: string;
+  note: string;
+  color: 'rose' | 'amber' | 'sage' | 'cream';
+  createdAt: string;
 }
 
 export type PhotoCategory = 'all' | 'milestones' | 'adventures' | 'childhood' | 'friends';

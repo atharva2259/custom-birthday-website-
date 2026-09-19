@@ -34,7 +34,7 @@ export const CustomizerModal: React.FC<CustomizerModalProps> = ({
   onOpenSourceCode,
 }) => {
   const [formData, setFormData] = useState<BirthdayEventConfig>(config);
-  const [activeTab, setActiveTab] = useState<'general' | 'theme'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'theme' | 'letter'>('general');
   const [saveToast, setSaveToast] = useState(false);
 
   if (!isOpen) return null;
@@ -125,10 +125,11 @@ export const CustomizerModal: React.FC<CustomizerModalProps> = ({
           {[
             { id: 'general', label: 'Honoree & Gathering' },
             { id: 'theme', label: 'Aesthetic Palette' },
+            { id: 'letter', label: 'Wish Letter' },
           ].map(tab => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as 'general' | 'theme')}
+              onClick={() => setActiveTab(tab.id as 'general' | 'theme' | 'letter')}
               className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
                 activeTab === tab.id
                   ? 'bg-[#2D2A26] text-white'
@@ -296,6 +297,71 @@ export const CustomizerModal: React.FC<CustomizerModalProps> = ({
                     </button>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'letter' && (
+            <div className="space-y-4">
+              <p className="text-xs text-[#6E665E]">
+                Personalize the aesthetic keepsake birthday letter displayed inside the vintage wax-sealed envelope.
+              </p>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wider font-semibold text-[#6E665E] mb-1">
+                  Letter Salutation
+                </label>
+                <input
+                  type="text"
+                  value={formData.letterSalutation ?? `Dearest ${formData.personName},`}
+                  onChange={e => setFormData({ ...formData, letterSalutation: e.target.value })}
+                  placeholder="e.g. Dearest Sophia,"
+                  className="w-full px-3.5 py-2 rounded-xl bg-white border border-[#E8E1DA] text-sm text-[#2D2A26]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wider font-semibold text-[#6E665E] mb-1">
+                  Letter Body (Paragraphs separated by blank lines)
+                </label>
+                <textarea
+                  rows={6}
+                  value={
+                    formData.letterBody ??
+                    'On this sunlit day marking another beautiful revolution around the sun, we pause the rush of the world to celebrate the quiet poetry and luminous light that is you.'
+                  }
+                  onChange={e => setFormData({ ...formData, letterBody: e.target.value })}
+                  placeholder="Write your heartfelt message..."
+                  className="w-full px-3.5 py-2 rounded-xl bg-white border border-[#E8E1DA] text-sm text-[#2D2A26] font-serif leading-relaxed"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs uppercase tracking-wider font-semibold text-[#6E665E] mb-1">
+                    Sign-off Phrase
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.letterSignoff ?? 'With all our love and infinite admiration,'}
+                    onChange={e => setFormData({ ...formData, letterSignoff: e.target.value })}
+                    placeholder="e.g. With all our love,"
+                    className="w-full px-3.5 py-2 rounded-xl bg-white border border-[#E8E1DA] text-sm text-[#2D2A26]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs uppercase tracking-wider font-semibold text-[#6E665E] mb-1">
+                    Signed By / Author
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.letterAuthor ?? 'Your Cherished Family & Lifelong Friends'}
+                    onChange={e => setFormData({ ...formData, letterAuthor: e.target.value })}
+                    placeholder="e.g. Elena & Friends"
+                    className="w-full px-3.5 py-2 rounded-xl bg-white border border-[#E8E1DA] text-sm text-[#2D2A26]"
+                  />
+                </div>
               </div>
             </div>
           )}

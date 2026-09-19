@@ -13,6 +13,7 @@ import {
   Download,
   Code2,
   Lock,
+  Feather,
 } from 'lucide-react';
 import { BirthdayEventConfig, ThemeColors } from '../types';
 
@@ -60,6 +61,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const navLinks = [
     { label: 'Event Details', href: '#countdown-section', icon: Calendar },
     { label: 'Cut Cake', href: '#interactive-cake-section', icon: Cake },
+    { label: 'Wish Letter', href: '#wish-letter-section', icon: Feather },
     { label: 'Memories', href: '#photo-gallery-section', icon: Image },
   ];
 
