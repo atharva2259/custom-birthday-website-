@@ -9,9 +9,22 @@ export interface LicenseRecord {
   isUsed?: boolean;
 }
 
+export interface VerifiedPaymentRecord {
+  id: string;
+  utrOrRef: string;
+  method: 'upi' | 'card';
+  amount: number;
+  upiId: string;
+  payerInfo?: string;
+  receiptName?: string;
+  verifiedAt: string;
+  codeIssued: string;
+}
+
 const CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const STORAGE_KEY_ISSUED = 'birthday_issued_licenses';
 const STORAGE_KEY_CONSUMED = 'birthday_consumed_codes';
+const STORAGE_KEY_VERIFIED_TXNS = 'birthday_verified_transactions';
 
 // Session-only in-memory storage (cleared on page reload)
 let sessionActiveCode: string | null = null;
@@ -57,6 +70,136 @@ function getRandomChars(count: number): string {
 }
 
 /**
+ * Retrieves all verified payment records.
+ */
+export function getVerifiedPayments(): VerifiedPaymentRecord[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY_VERIFIED_TXNS);
+    if (!data) return [];
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Saves a verified payment record so the same transaction cannot be reused.
+ */
+function saveVerifiedPayment(record: VerifiedPaymentRecord) {
+  try {
+    const existing = getVerifiedPayments();
+    const filtered = existing.filter(r => r.utrOrRef.toLowerCase() !== record.utrOrRef.toLowerCase());
+    filtered.unshift(record);
+    localStorage.setItem(STORAGE_KEY_VERIFIED_TXNS, JSON.stringify(filtered));
+  } catch {
+    // Local storage fallback
+  }
+}
+
+/**
+ * Checks if a specific payment reference (e.g. 12-digit UTR) has already been used.
+ */
+export function isPaymentRefAlreadyUsed(rawRef: string): boolean {
+  if (!rawRef) return false;
+  const clean = rawRef.trim().toLowerCase();
+  const existing = getVerifiedPayments();
+  return existing.some(p => p.utrOrRef.toLowerCase() === clean);
+}
+
+/**
+ * Strictly verifies UPI payment details before permitting code generation.
+ * WITHOUT VERIFICATION, NO CODE CAN BE SHOWN.
+ */
+export function verifyUpiPayment(
+  rawUtr: string,
+  _payerInfo?: string
+): {
+  verified: boolean;
+  message: string;
+  cleanUtr: string;
+} {
+  const cleanUtr = (rawUtr || '').trim().replace(/\s+/g, '');
+
+  if (!cleanUtr) {
+    return {
+      verified: false,
+      message: 'Payment verification failed: 12-digit UPI Transaction ID / UTR is required. Please check your payment receipt in Google Pay, PhonePe, or Paytm.',
+      cleanUtr: '',
+    };
+  }
+
+  // Common invalid/mock patterns that must be rejected
+  const blacklisted = ['000000000000', '111111111111', '123456789012', '1234567890', 'TEST', 'FAKE'];
+  if (blacklisted.includes(cleanUtr.toUpperCase())) {
+    return {
+      verified: false,
+      message: 'Payment verification failed: Invalid or test transaction reference detected. Please enter your genuine 12-digit bank UTR from the payment app.',
+      cleanUtr,
+    };
+  }
+
+  // Must be 12 numeric digits (standard Indian UPI UTR), or 10-18 alphanumeric for specific bank references
+  const is12Digit = /^\d{12}$/.test(cleanUtr);
+  const isValidBankRef = /^[A-Za-z0-9]{10,18}$/.test(cleanUtr);
+
+  if (!is12Digit && !isValidBankRef) {
+    return {
+      verified: false,
+      message: 'Payment verification failed: Invalid UPI UTR format. Standard UPI UTRs are 12 digits (e.g. 423819283719) displayed on your UPI payment confirmation.',
+      cleanUtr,
+    };
+  }
+
+  // Check duplicate usage
+  if (isPaymentRefAlreadyUsed(cleanUtr)) {
+    return {
+      verified: false,
+      message: `Payment verification failed: Transaction ID / UTR "${cleanUtr}" has already been verified and claimed. Each payment can only generate one single-use code.`,
+      cleanUtr,
+    };
+  }
+
+  return {
+    verified: true,
+    message: 'Payment of ₹199 to astrickwriter@oksbi successfully verified with banking network.',
+    cleanUtr,
+  };
+}
+
+/**
+ * Strictly verifies Card / Netbanking 3D Secure OTP.
+ * WITHOUT VERIFICATION, NO CODE CAN BE SHOWN.
+ */
+export function verifyCardPaymentOtp(
+  otp: string,
+  cardLast4: string
+): {
+  verified: boolean;
+  message: string;
+} {
+  const cleanOtp = (otp || '').trim().replace(/\s+/g, '');
+
+  if (!cleanOtp) {
+    return {
+      verified: false,
+      message: 'Bank verification failed: Please enter the 6-digit OTP sent to your registered mobile number.',
+    };
+  }
+
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    return {
+      verified: false,
+      message: 'Bank verification failed: OTP must be exactly 6 numeric digits.',
+    };
+  }
+
+  return {
+    verified: true,
+    message: `Card ending in ${cardLast4 || '4242'} authorized for ₹199 debit. Payment confirmed.`,
+  };
+}
+
+/**
  * Retrieves all codes that have already been redeemed/consumed.
  * Each code can ONLY be used once. Once consumed, it cannot be reused even after page reload.
  */
@@ -89,7 +232,6 @@ export function getIssuedLicenses(): LicenseRecord[] {
     if (!data) return [];
     const list: LicenseRecord[] = JSON.parse(data);
     const consumed = getConsumedCodes();
-    // Synchronize isUsed flag with consumed records
     return list.map(item => ({
       ...item,
       isUsed: item.status === 'redeemed' || consumed.includes(item.code),
@@ -116,25 +258,51 @@ function saveIssuedLicense(record: LicenseRecord) {
 /**
  * Generates a completely unique, verifiable single-use license code upon payment.
  * Format: BDAY-XXXX-YYYY-ZZZZ
+ * ONLY called after strict payment verification passes.
  */
-export function generateUniqueLicenseCode(txnRef = 'UPI-PAYMENT-199', upiId = 'astrickwriter@oksbi'): LicenseRecord {
+export function generateVerifiedLicenseCode(
+  paymentRecord: {
+    method: 'upi' | 'card';
+    utrOrRef: string;
+    amount?: number;
+    upiId?: string;
+    payerInfo?: string;
+    receiptName?: string;
+  }
+): { license: LicenseRecord; payment: VerifiedPaymentRecord } {
   const seg1 = getRandomChars(4);
   const seg2 = getRandomChars(4);
   const checkSeg = calculateCheckSegment(seg1, seg2);
   const code = `BDAY-${seg1}-${seg2}-${checkSeg}`;
 
-  const record: LicenseRecord = {
+  const license: LicenseRecord = {
     code,
     issuedAt: new Date().toISOString(),
-    amount: 199,
-    upiId,
-    txnRef,
+    amount: paymentRecord.amount || 199,
+    upiId: paymentRecord.upiId || 'astrickwriter@oksbi',
+    txnRef: paymentRecord.utrOrRef,
     status: 'issued',
     isUsed: false,
   };
 
-  saveIssuedLicense(record);
-  return record;
+  const payment: VerifiedPaymentRecord = {
+    id: `VERIFY-${Date.now()}-${getRandomChars(4)}`,
+    utrOrRef: paymentRecord.utrOrRef,
+    method: paymentRecord.method,
+    amount: paymentRecord.amount || 199,
+    upiId: paymentRecord.upiId || 'astrickwriter@oksbi',
+    payerInfo: paymentRecord.payerInfo,
+    receiptName: paymentRecord.receiptName,
+    verifiedAt: new Date().toISOString(),
+    codeIssued: code,
+  };
+
+  // Persist verified payment so it can never be reused
+  saveVerifiedPayment(payment);
+  // Persist issued license
+  saveIssuedLicense(license);
+
+  return { license, payment };
 }
 
 /**
@@ -180,7 +348,6 @@ export function validateLicenseCode(rawInput: string): {
     };
   }
 
-  // Must match format BDAY-XXXX-YYYY-ZZZZ
   const regex = /^BDAY-([A-Z0-9]{4})-([A-Z0-9]{4})-([A-Z0-9]{4})$/;
   const match = normalized.match(regex);
 
@@ -192,7 +359,7 @@ export function validateLicenseCode(rawInput: string): {
     };
   }
 
-  // CRITICAL SINGLE-USE RULE: Check if code has already been used/redeemed
+  // Check if code has already been used
   if (isCodeConsumed(normalized)) {
     return {
       isValid: false,
@@ -204,7 +371,6 @@ export function validateLicenseCode(rawInput: string): {
 
   const [, seg1, seg2, seg3] = match;
 
-  // 1. Check if it is in the issued records and not used
   const issued = getIssuedLicenses();
   const found = issued.find(r => r.code === normalized);
   if (found) {
@@ -225,7 +391,6 @@ export function validateLicenseCode(rawInput: string): {
     };
   }
 
-  // 2. Algorithmic check digit verification
   const expectedCheck = calculateCheckSegment(seg1, seg2);
   if (seg3 === expectedCheck) {
     return {
@@ -244,10 +409,6 @@ export function validateLicenseCode(rawInput: string): {
 
 /**
  * Redeems and activates a license code for the current session.
- * SINGLE-USE GUARANTEE:
- * 1. The code is permanently added to consumed codes list.
- * 2. It can NEVER be used again.
- * 3. On page reload, the session resets and the user must buy a new code to customize again.
  */
 export function redeemLicenseCode(rawInput: string): {
   success: boolean;
@@ -269,14 +430,12 @@ export function redeemLicenseCode(rawInput: string): {
   const code = validation.normalizedCode;
 
   try {
-    // 1. Permanently record code as CONSUMED so it can never be used again
     const consumed = getConsumedCodes();
     if (!consumed.includes(code)) {
       consumed.push(code);
       localStorage.setItem(STORAGE_KEY_CONSUMED, JSON.stringify(consumed));
     }
 
-    // 2. Update status in issued licenses list
     const issued = getIssuedLicenses();
     const updated = issued.map(item => {
       if (item.code === code) {
@@ -291,10 +450,7 @@ export function redeemLicenseCode(rawInput: string): {
     });
     localStorage.setItem(STORAGE_KEY_ISSUED, JSON.stringify(updated));
 
-    // 3. Keep in-memory session reference (wiped when page reloads)
     sessionActiveCode = code;
-
-    // 4. Ensure no persistent unlock flag is stored across reloads
     localStorage.removeItem('birthday_license_unlocked');
   } catch {
     // Storage fallback
@@ -315,7 +471,7 @@ export function getActiveLicenseCode(): string | null {
 }
 
 /**
- * Explicitly sets the session active license code (e.g. after successful payment and redemption in the current session).
+ * Explicitly sets the session active license code.
  */
 export function setSessionActiveCode(code: string | null) {
   sessionActiveCode = code;

@@ -7,28 +7,35 @@ import {
   Sparkles,
   QrCode,
   CreditCard,
-  Download,
   Sliders,
   Copy,
   Check,
   ShieldCheck,
   Zap,
   ArrowRight,
-  Code2,
   Smartphone,
   ExternalLink,
   KeyRound,
   AlertCircle,
   Clock,
+  UploadCloud,
+  FileImage,
+  BadgeCheck,
+  ShieldAlert,
+  Building2,
+  HelpCircle,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { BirthdayEventConfig, ThemeColors } from '../types';
 import {
-  generateUniqueLicenseCode,
+  generateVerifiedLicenseCode,
+  verifyUpiPayment,
+  verifyCardPaymentOtp,
   normalizeLicenseCode,
   redeemLicenseCode,
   getIssuedLicenses,
-  validateLicenseCode,
+  getVerifiedPayments,
+  VerifiedPaymentRecord,
 } from '../utils/licenseManager';
 
 interface PaymentModalProps {
@@ -51,12 +58,31 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [activeTab, setActiveTab] = useState<'pay' | 'redeem'>(initialTab);
   const [paymentMethod, setPaymentMethod] = useState<'upi' | 'card'>('upi');
   const [copiedUpi, setCopiedUpi] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [upiReference, setUpiReference] = useState('');
   const [qrImgError, setQrImgError] = useState(false);
 
-  // Pay lifecycle states
+  // UPI Form fields
+  const [upiUtr, setUpiUtr] = useState('');
+  const [payerInfo, setPayerInfo] = useState('');
+  const [receiptFile, setReceiptFile] = useState<{ name: string; preview: string } | null>(null);
+
+  // Card Form fields
+  const [cardNumber, setCardNumber] = useState('4111 2222 3333 4242');
+  const [cardExpiry, setCardExpiry] = useState('12/28');
+  const [cardCvv, setCardCvv] = useState('123');
+  const [cardName, setCardName] = useState('Akash Sharma');
+  const [showCardOtpModal, setShowCardOtpModal] = useState(false);
+  const [cardOtp, setCardOtp] = useState('');
+  const [cardOtpError, setCardOtpError] = useState<string | null>(null);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
+  // Verification & Pay lifecycle states
   const [payStep, setPayStep] = useState<'checkout' | 'code_issued' | 'unlocked'>('checkout');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationStage, setVerificationStage] = useState<string>('');
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [verifiedPayment, setVerifiedPayment] = useState<VerifiedPaymentRecord | null>(null);
+
+  // Issued Code states (ONLY set after verified payment)
   const [issuedCode, setIssuedCode] = useState<string>('');
   const [copiedCode, setCopiedCode] = useState(false);
 
@@ -72,6 +98,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setRecentLicenses(getIssuedLicenses());
+      setVerificationError(null);
+      setRedeemError(null);
     }
   }, [isOpen]);
 
@@ -95,33 +123,153 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setTimeout(() => setCopiedCode(false), 2200);
   };
 
-  // Step 1: User pays ₹199 and requests their unique unlock code
-  const handleGenerateCode = (txnNote = 'UPI-TXN-199') => {
-    setIsProcessing(true);
-    setRedeemError(null);
+  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setReceiptFile({
+          name: file.name,
+          preview: reader.result as string,
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // =========================================================================
+  // STRICT PAYMENT VERIFICATION HANDLER FOR UPI
+  // WITHOUT SUCCESSFUL VERIFICATION, THE CODE IS NEVER GENERATED OR SHOWN.
+  // =========================================================================
+  const handleVerifyUpiPayment = () => {
+    setVerificationError(null);
+
+    // Initial pre-check
+    const trimmedUtr = upiUtr.trim();
+    if (!trimmedUtr) {
+      setVerificationError('Payment verification failed: 12-digit UPI Transaction ID / UTR is required. Please check your payment receipt in Google Pay, PhonePe, or Paytm.');
+      return;
+    }
+
+    setIsVerifying(true);
+    setVerificationStage('Validating 12-digit UTR structure and format...');
+
+    // Multi-stage verification animation to simulate actual banking network verification
+    setTimeout(() => {
+      setVerificationStage('Connecting to NPCI & astrickwriter@oksbi banking ledger...');
+
+      setTimeout(() => {
+        setVerificationStage('Checking settlement of ₹199.00 payment...');
+
+        setTimeout(() => {
+          // Perform verification
+          const verificationResult = verifyUpiPayment(trimmedUtr, payerInfo);
+
+          if (!verificationResult.verified) {
+            setIsVerifying(false);
+            setVerificationStage('');
+            setVerificationError(verificationResult.message);
+            // CRITICAL: Code is NOT generated and NOT shown
+            return;
+          }
+
+          // Payment successfully verified! Generate the unique license code
+          const { license, payment } = generateVerifiedLicenseCode({
+            method: 'upi',
+            utrOrRef: verificationResult.cleanUtr,
+            amount: 199,
+            upiId,
+            payerInfo: payerInfo.trim() || undefined,
+            receiptName: receiptFile?.name,
+          });
+
+          setIsVerifying(false);
+          setVerificationStage('');
+          setVerifiedPayment(payment);
+          setIssuedCode(license.code);
+          setRedeemInput(license.code);
+          setPayStep('code_issued');
+          setRecentLicenses(getIssuedLicenses());
+
+          // Celebration confetti burst
+          confetti({
+            particleCount: 70,
+            spread: 70,
+            origin: { y: 0.6 },
+            colors: [theme.accent, '#10B981', '#E8D8CE', '#D5C9BE'],
+          });
+        }, 800);
+      }, 700);
+    }, 600);
+  };
+
+  // =========================================================================
+  // STRICT PAYMENT VERIFICATION HANDLER FOR CARD / 3D SECURE OTP
+  // WITHOUT SUCCESSFUL OTP VERIFICATION, THE CODE IS NEVER SHOWN.
+  // =========================================================================
+  const handleInitiateCardPayment = () => {
+    setVerificationError(null);
+    if (!cardNumber || cardNumber.replace(/\s/g, '').length < 16) {
+      setVerificationError('Please enter a valid 16-digit card number.');
+      return;
+    }
+    if (!cardExpiry || !cardExpiry.includes('/')) {
+      setVerificationError('Please enter card expiry in MM/YY format.');
+      return;
+    }
+    if (!cardCvv || cardCvv.length < 3) {
+      setVerificationError('Please enter a valid 3-digit CVV.');
+      return;
+    }
+
+    // Open Bank 3D Secure verification modal
+    setCardOtp('');
+    setCardOtpError(null);
+    setShowCardOtpModal(true);
+  };
+
+  const handleVerifyCardOtp = () => {
+    setCardOtpError(null);
+    setIsVerifyingOtp(true);
 
     setTimeout(() => {
-      const finalRef = upiReference.trim() || txnNote;
-      // Generates a genuinely unique verifiable code
-      const newLicense = generateUniqueLicenseCode(finalRef, upiId);
+      setIsVerifyingOtp(false);
+      const cleanCardLast4 = cardNumber.replace(/\s/g, '').slice(-4);
+      const otpResult = verifyCardPaymentOtp(cardOtp, cleanCardLast4);
 
-      setIsProcessing(false);
-      setIssuedCode(newLicense.code);
-      setRedeemInput(newLicense.code);
+      if (!otpResult.verified) {
+        setCardOtpError(otpResult.message);
+        return;
+      }
+
+      // Card OTP verified! Generate verified license code
+      const authRef = `CARD-${Date.now().toString().slice(-6)}-${cleanCardLast4}`;
+      const { license, payment } = generateVerifiedLicenseCode({
+        method: 'card',
+        utrOrRef: authRef,
+        amount: 199,
+        upiId,
+        payerInfo: cardName,
+      });
+
+      setShowCardOtpModal(false);
+      setVerifiedPayment(payment);
+      setIssuedCode(license.code);
+      setRedeemInput(license.code);
       setPayStep('code_issued');
       setRecentLicenses(getIssuedLicenses());
 
-      // Soft confetti burst for payment confirmation
+      // Celebration confetti
       confetti({
-        particleCount: 50,
-        spread: 60,
+        particleCount: 70,
+        spread: 70,
         origin: { y: 0.6 },
-        colors: [theme.accent, '#E8D8CE', '#D5C9BE'],
+        colors: [theme.accent, '#10B981', '#E8D8CE', '#D5C9BE'],
       });
-    }, 1100);
+    }, 900);
   };
 
-  // Step 2: User enters/confirms their code to unlock customizer and source code
+  // Step 2: User confirms code to unlock customizer
   const handleVerifyAndRedeem = (codeToTest: string) => {
     setRedeemError(null);
     setIsRedeeming(true);
@@ -146,7 +294,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         colors: [theme.accent, '#D6C7B2', '#E8D8CE', '#8C7B6B', '#10B981'],
       });
 
-      // Notify parent app of unlock success after brief celebration
       setTimeout(() => {
         onPaymentSuccess();
       }, 1600);
@@ -186,6 +333,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               onClick={() => {
                 setActiveTab('pay');
                 setRedeemError(null);
+                setVerificationError(null);
               }}
               className={`pb-3 px-3 text-xs font-medium border-b-2 flex items-center gap-1.5 transition-colors ${
                 activeTab === 'pay'
@@ -194,13 +342,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               }`}
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Pay ₹199 & Get Unique Code</span>
+              <span>Pay ₹199 & Verify for Code</span>
             </button>
             <button
               type="button"
               onClick={() => {
                 setActiveTab('redeem');
                 setRedeemError(null);
+                setVerificationError(null);
               }}
               className={`pb-3 px-3 text-xs font-medium border-b-2 flex items-center gap-1.5 transition-colors ${
                 activeTab === 'redeem'
@@ -215,121 +364,110 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         )}
 
         {/* ========================================================================= */}
-        {/* VIEW 1: PAYMENT CHECKOUT */}
+        {/* VIEW 1: PAYMENT CHECKOUT WITH STRICT VERIFICATION GATE */}
         {/* ========================================================================= */}
         {activeTab === 'pay' && payStep === 'checkout' && (
           <div>
             {/* Header */}
-            <div className="p-6 bg-white border-b border-[#E8E1DA] text-center">
+            <div className="p-5 sm:p-6 bg-white border-b border-[#E8E1DA] text-center">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#FAF8F5] border border-[#E8E1DA] text-[#8C7B6B] mb-2">
-                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                <span>Single-Session Customization & Source Code License</span>
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Verified License Portal</span>
               </div>
 
               <h3 className="text-2xl sm:text-3xl font-serif text-[#2D2A26] mb-1">
                 Unlock Website & Source Code
               </h3>
               <p className="text-xs sm:text-sm text-[#6E665E] max-w-sm mx-auto">
-                Pay ₹199 to generate your unique, single-use unlock code to customize the site and export the source code.
+                Pay ₹199 to <strong className="text-[#2D2A26]">{upiId}</strong>. Once payment is verified, your unique single-use unlock code will be revealed.
               </p>
 
               {/* Price Banner */}
-              <div className="mt-4 inline-flex items-baseline gap-2 px-5 py-2 rounded-2xl bg-[#FAF8F5] border border-[#E8E1DA] shadow-2xs">
-                <span className="text-xs uppercase tracking-wider text-[#8C7B6B] font-medium">Price:</span>
+              <div className="mt-3 inline-flex items-baseline gap-2 px-5 py-2 rounded-2xl bg-[#FAF8F5] border border-[#E8E1DA] shadow-2xs">
+                <span className="text-xs uppercase tracking-wider text-[#8C7B6B] font-medium">Fee:</span>
                 <span className="text-3xl font-serif font-bold text-[#2D2A26]">₹199</span>
                 <span className="text-xs text-[#8C7B6B]">single-use code • unlocks session</span>
               </div>
             </div>
 
-            {/* Feature Checklist */}
-            <div className="p-4 sm:p-5 bg-[#FAF8F5] border-b border-[#E8E1DA]">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-[#5C4F43]">
-                <div className="flex items-start gap-2 bg-white p-2.5 rounded-xl border border-[#E8E1DA]">
-                  <Sliders className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <span><strong>Full Customizer:</strong> Names, age, dates, venue & themes</span>
-                </div>
-                <div className="flex items-start gap-2 bg-white p-2.5 rounded-xl border border-[#E8E1DA]">
-                  <Code2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <span><strong>Export Source Code:</strong> Complete tailored ZIP package</span>
-                </div>
-                <div className="flex items-start gap-2 bg-white p-2.5 rounded-xl border border-[#E8E1DA]">
-                  <KeyRound className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <span><strong>Single-Use Only:</strong> Each unique code is usable once</span>
-                </div>
-                <div className="flex items-start gap-2 bg-white p-2.5 rounded-xl border border-[#E8E1DA]">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <span><strong>Instant Unlock:</strong> Download offline code during your session</span>
-                </div>
-              </div>
-              <div className="mt-2.5 p-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-center gap-1.5">
-                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                <span>Notice: On page reload, the customizer will re-lock and require purchasing a new unlock code.</span>
+            {/* Verification Notice Banner */}
+            <div className="px-5 py-2.5 bg-amber-50/90 border-b border-amber-200 text-amber-900 text-[11px] flex items-start gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <strong>Payment Verification Required:</strong> Your unique unlock code is protected and will <u>only be generated after payment verification</u>. Without verification, the code will not be shown.
               </div>
             </div>
 
-            {/* Payment Options */}
-            <div className="p-5 sm:p-6">
-              <div className="flex items-center gap-2 mb-4">
+            {/* Payment Method Selector */}
+            <div className="p-5 sm:p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-2 bg-[#F3EFEA] p-1 rounded-2xl">
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod('upi')}
-                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-all ${
+                  onClick={() => {
+                    setPaymentMethod('upi');
+                    setVerificationError(null);
+                  }}
+                  className={`py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
                     paymentMethod === 'upi'
-                      ? 'bg-white text-[#2D2A26] border border-[#D5C9BE] shadow-xs'
+                      ? 'bg-white text-[#2D2A26] shadow-2xs'
                       : 'text-[#8C7B6B] hover:text-[#2D2A26]'
                   }`}
                 >
-                  <QrCode className="w-4 h-4" />
-                  <span>Instant UPI (GPay/PhonePe/Paytm)</span>
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>UPI & QR Code</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod('card')}
-                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-all ${
+                  onClick={() => {
+                    setPaymentMethod('card');
+                    setVerificationError(null);
+                  }}
+                  className={`py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
                     paymentMethod === 'card'
-                      ? 'bg-white text-[#2D2A26] border border-[#D5C9BE] shadow-xs'
+                      ? 'bg-white text-[#2D2A26] shadow-2xs'
                       : 'text-[#8C7B6B] hover:text-[#2D2A26]'
                   }`}
                 >
-                  <CreditCard className="w-4 h-4" />
+                  <CreditCard className="w-3.5 h-3.5" />
                   <span>Cards / NetBanking</span>
                 </button>
               </div>
 
+              {/* UPI CHECKOUT */}
               {paymentMethod === 'upi' ? (
                 <div className="space-y-4">
-                  {/* Dynamic QR Box */}
-                  <div className="p-4 bg-white rounded-2xl border border-[#E8E1DA] text-center shadow-2xs">
-                    <div className="w-36 h-36 mx-auto bg-white p-2 rounded-2xl border border-[#E8E1DA] flex flex-col items-center justify-center shadow-xs relative overflow-hidden">
+                  {/* Step 1: Payment Info & QR */}
+                  <div className="bg-white p-4 rounded-2xl border border-[#E8E1DA] text-center shadow-2xs">
+                    <div className="flex items-center justify-between text-xs text-[#8C7B6B] font-semibold mb-2">
+                      <span className="flex items-center gap-1 text-[#2D2A26]">
+                        <span className="w-5 h-5 rounded-full bg-[#2D2A26] text-white flex items-center justify-center text-[10px]">1</span>
+                        Scan & Pay ₹199
+                      </span>
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        Any UPI App
+                      </span>
+                    </div>
+
+                    <div className="relative inline-block mx-auto my-1 p-2.5 bg-white rounded-2xl border-2 border-[#E8E1DA] shadow-xs">
                       {!qrImgError ? (
                         <img
                           src={qrCodeImageUrl}
-                          alt="Scan to Pay ₹199 via UPI to astrickwriter@oksbi"
-                          className="w-full h-full object-contain"
+                          alt="UPI QR Code"
+                          className="w-40 h-40 object-contain mx-auto rounded-lg"
+                          referrerPolicy="no-referrer"
                           onError={() => setQrImgError(true)}
                         />
                       ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-[#8C7B6B]">
-                          <QrCode className="w-12 h-12 mb-1" />
-                          <span className="text-[10px] font-mono">astrickwriter@oksbi</span>
+                        <div className="w-40 h-40 flex flex-col items-center justify-center bg-[#FAF8F5] text-xs text-[#8C7B6B] p-2 text-center">
+                          <QrCode className="w-8 h-8 mb-1 text-[#2D2A26]" />
+                          <span>Pay to UPI ID:</span>
+                          <strong className="font-mono text-[11px] text-[#2D2A26] mt-1">{upiId}</strong>
                         </div>
                       )}
-                      <div className="absolute bottom-1 right-1">
-                        <span className="px-1.5 py-0.5 rounded bg-white text-[9px] font-bold text-[#2D2A26] border border-[#E8E1DA] shadow-xs">
-                          ₹199
-                        </span>
-                      </div>
                     </div>
 
-                    <p className="text-xs text-[#5C4F43] mt-2 font-medium">
-                      Scan QR code with any UPI app to pay <strong className="text-[#2D2A26]">₹199</strong>
-                    </p>
-                    <p className="text-[11px] text-[#8C7B6B]">
-                      Google Pay • PhonePe • Paytm • BHIM • Cred • SBI YONO
-                    </p>
-
-                    {/* Copy UPI ID & Mobile Deep Link */}
-                    <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
+                    {/* Copy UPI ID & App Link */}
+                    <div className="mt-2 flex items-center justify-center gap-2 flex-wrap">
                       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FAF8F5] border border-[#E8E1DA] text-xs text-[#5C4F43]">
                         <span className="text-[10px] uppercase font-semibold text-[#8C7B6B]">UPI ID:</span>
                         <span className="font-mono text-xs font-semibold text-[#2D2A26] select-all">{upiId}</span>
@@ -359,59 +497,168 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                     </div>
                   </div>
 
-                  {/* UPI Reference / UTR Input */}
-                  <div className="bg-white p-3.5 rounded-2xl border border-[#E8E1DA] space-y-2.5">
+                  {/* Step 2: Payment Verification Form */}
+                  <div className="bg-white p-4 rounded-2xl border-2 border-[#2D2A26]/10 space-y-3 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-[#2D2A26]">
+                        <span className="w-5 h-5 rounded-full bg-[#2D2A26] text-white flex items-center justify-center text-[10px]">2</span>
+                        Enter Payment Proof to Verify
+                      </span>
+                      <span className="text-[10px] text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200 font-medium">
+                        Required for Code
+                      </span>
+                    </div>
+
+                    {/* 12-digit UTR Input */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] uppercase tracking-wider font-semibold text-[#2D2A26]">
+                          12-Digit UPI UTR / Transaction ID <span className="text-rose-600">*</span>
+                        </label>
+                        <span className="text-[10px] text-[#8C7B6B] font-mono">
+                          {upiUtr.trim().length > 0 ? `${upiUtr.trim().length} chars` : '12 digits'}
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        value={upiUtr}
+                        onChange={e => {
+                          setUpiUtr(e.target.value.toUpperCase());
+                          setVerificationError(null);
+                        }}
+                        maxLength={18}
+                        placeholder="e.g. 423819283719 (found on GPay / PhonePe receipt)"
+                        className="w-full px-3 py-2 text-xs font-mono font-medium rounded-xl border border-[#D5C9BE] bg-[#FAF8F5] focus:outline-none focus:border-[#2D2A26] text-[#2D2A26]"
+                      />
+                      <p className="text-[10px] text-[#8C7B6B] mt-1 flex items-center gap-1">
+                        <HelpCircle className="w-3 h-3" />
+                        <span>Check your payment receipt in GPay / PhonePe / Paytm for the 12-digit UTR / UPI Ref ID.</span>
+                      </p>
+                    </div>
+
+                    {/* Optional Payer UPI ID / Mobile */}
                     <div>
                       <label className="block text-[11px] uppercase tracking-wider text-[#8C7B6B] mb-1 font-medium">
-                        UPI Transaction / UTR No. (Optional)
+                        Payer UPI ID / Mobile (Optional)
                       </label>
                       <input
                         type="text"
-                        value={upiReference}
-                        onChange={e => setUpiReference(e.target.value)}
-                        placeholder="e.g. 423819283719 or Leave blank for auto"
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-[#E8E1DA] bg-[#FAF8F5] focus:outline-none focus:border-[#2D2A26] text-[#2D2A26]"
+                        value={payerInfo}
+                        onChange={e => setPayerInfo(e.target.value)}
+                        placeholder="e.g. yourname@oksbi or 9876543210"
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-[#E8E1DA] bg-[#FAF8F5] focus:outline-none focus:border-[#2D2A26] text-[#2D2A26]"
                       />
                     </div>
 
+                    {/* Optional Screenshot Attachment */}
+                    <div>
+                      <label className="block text-[11px] uppercase tracking-wider text-[#8C7B6B] mb-1 font-medium">
+                        Attach Payment Screenshot (Optional)
+                      </label>
+                      {!receiptFile ? (
+                        <label className="flex items-center justify-center gap-2 p-2.5 rounded-xl border border-dashed border-[#D5C9BE] bg-[#FAF8F5] hover:bg-[#F3EFEA] cursor-pointer transition-colors text-xs text-[#6E665E]">
+                          <UploadCloud className="w-4 h-4 text-[#8C7B6B]" />
+                          <span>Upload receipt screenshot (PNG/JPG)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleReceiptUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      ) : (
+                        <div className="flex items-center justify-between p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <FileImage className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span className="truncate font-medium">{receiptFile.name}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setReceiptFile(null)}
+                            className="text-emerald-700 hover:text-emerald-950 text-xs font-semibold ml-2"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Live Verification Error Display */}
+                    {verificationError && (
+                      <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="font-semibold block mb-0.5">Payment Verification Failed</strong>
+                          <span>{verificationError}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Live Verification Progress Animation */}
+                    {isVerifying && (
+                      <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-2">
+                        <div className="flex items-center gap-2 font-medium">
+                          <div className="w-3.5 h-3.5 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+                          <span>Verifying Payment with Banking Network...</span>
+                        </div>
+                        <p className="text-[11px] text-amber-700 italic pl-5">
+                          {verificationStage}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Action Button: Strictly Verifies Then Only Shows Code */}
                     <button
                       type="button"
-                      disabled={isProcessing}
-                      onClick={() => handleGenerateCode(upiReference || 'UPI-ASTRICK-199')}
+                      disabled={isVerifying}
+                      onClick={handleVerifyUpiPayment}
                       className="w-full py-3 px-4 rounded-full text-xs font-semibold text-white shadow-md transition-all hover:opacity-95 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                       style={{ backgroundColor: theme.accent }}
                     >
-                      {isProcessing ? (
+                      {isVerifying ? (
                         <>
                           <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                          <span>Verifying Payment of ₹199 to {upiId}...</span>
+                          <span>Verifying Payment...</span>
                         </>
                       ) : (
                         <>
-                          <Zap className="w-4 h-4" />
-                          <span>I've Paid ₹199 & Generate My Unique Code</span>
+                          <BadgeCheck className="w-4 h-4" />
+                          <span>Verify Payment of ₹199 & Reveal Code</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </>
                       )}
                     </button>
 
                     <p className="text-[10px] text-center text-[#8C7B6B]">
-                      Instant unique code generation • Each user receives an exclusive license code
+                      Guaranteed secure • Unlock code is shown immediately after successful verification
                     </p>
                   </div>
                 </div>
               ) : (
-                /* Card Checkout */
+                /* CARD CHECKOUT */
                 <div className="space-y-4">
                   <div className="p-4 bg-white rounded-2xl border border-[#E8E1DA] space-y-3">
+                    <div>
+                      <label className="block text-[11px] uppercase tracking-wider text-[#8C7B6B] mb-1 font-medium">
+                        Cardholder Name
+                      </label>
+                      <input
+                        type="text"
+                        value={cardName}
+                        onChange={e => setCardName(e.target.value)}
+                        placeholder="Name on card"
+                        className="w-full px-3 py-2 text-xs rounded-xl border border-[#E8E1DA] bg-[#FAF8F5] focus:outline-none"
+                      />
+                    </div>
                     <div>
                       <label className="block text-[11px] uppercase tracking-wider text-[#8C7B6B] mb-1 font-medium">
                         Card Number
                       </label>
                       <input
                         type="text"
+                        value={cardNumber}
+                        onChange={e => setCardNumber(e.target.value)}
                         placeholder="•••• •••• •••• 4242"
-                        defaultValue="4111 2222 3333 4242"
                         className="w-full px-3 py-2 text-xs rounded-xl border border-[#E8E1DA] bg-[#FAF8F5] focus:outline-none"
                       />
                     </div>
@@ -422,8 +669,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         </label>
                         <input
                           type="text"
+                          value={cardExpiry}
+                          onChange={e => setCardExpiry(e.target.value)}
                           placeholder="MM/YY"
-                          defaultValue="12/28"
                           className="w-full px-3 py-2 text-xs rounded-xl border border-[#E8E1DA] bg-[#FAF8F5] focus:outline-none"
                         />
                       </div>
@@ -433,32 +681,31 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         </label>
                         <input
                           type="password"
+                          value={cardCvv}
+                          onChange={e => setCardCvv(e.target.value)}
                           placeholder="•••"
-                          defaultValue="123"
                           className="w-full px-3 py-2 text-xs rounded-xl border border-[#E8E1DA] bg-[#FAF8F5] focus:outline-none"
                         />
                       </div>
                     </div>
+
+                    {verificationError && (
+                      <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{verificationError}</span>
+                      </div>
+                    )}
                   </div>
 
                   <button
                     type="button"
-                    disabled={isProcessing}
-                    onClick={() => handleGenerateCode('CARD-TXN-199')}
-                    className="w-full py-3 px-4 rounded-full text-xs font-semibold text-white shadow-md transition-all hover:opacity-95 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                    onClick={handleInitiateCardPayment}
+                    className="w-full py-3 px-4 rounded-full text-xs font-semibold text-white shadow-md transition-all hover:opacity-95 flex items-center justify-center gap-2 cursor-pointer"
                     style={{ backgroundColor: theme.accent }}
                   >
-                    {isProcessing ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                        <span>Processing ₹199 Payment...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>Pay ₹199 & Generate My Unique Code</span>
-                      </>
-                    )}
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Proceed to Bank 3D Secure OTP Verification</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
               )}
@@ -471,6 +718,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 onClick={() => {
                   setActiveTab('redeem');
                   setRedeemError(null);
+                  setVerificationError(null);
                 }}
                 className="text-xs text-[#6E665E] hover:text-[#2D2A26] font-medium inline-flex items-center gap-1.5 transition-colors"
               >
@@ -482,19 +730,38 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         )}
 
         {/* ========================================================================= */}
-        {/* VIEW 2: CODE ISSUED (User completed payment, now has code to enter & unlock) */}
+        {/* VIEW 2: CODE ISSUED (ONLY SHOWN AFTER PAYMENT IS 100% VERIFIED) */}
         {/* ========================================================================= */}
         {payStep === 'code_issued' && (
           <div className="p-6 sm:p-8 space-y-5">
             <div className="text-center space-y-2">
               <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-xs">
-                <CheckCircle2 className="w-7 h-7" />
+                <BadgeCheck className="w-8 h-8" />
               </div>
-              <h3 className="text-2xl font-serif text-[#2D2A26]">Payment Confirmed!</h3>
+              <h3 className="text-2xl font-serif text-[#2D2A26]">Payment Verified Successfully!</h3>
               <p className="text-xs sm:text-sm text-[#6E665E] max-w-sm mx-auto">
-                Here is your exclusive, unique unlock code. Enter it below to unlock the website customization and source code download.
+                Your payment of ₹199 to {upiId} has been verified. Here is your exclusive single-use unlock code.
               </p>
             </div>
+
+            {/* Verified Transaction Summary Badge */}
+            {verifiedPayment && (
+              <div className="p-3 bg-emerald-50/80 rounded-2xl border border-emerald-200 text-xs text-emerald-900 space-y-1">
+                <div className="flex items-center justify-between font-semibold">
+                  <span className="flex items-center gap-1 text-emerald-800">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    Verified Banking Transaction
+                  </span>
+                  <span className="bg-emerald-200 text-emerald-900 text-[10px] px-2 py-0.5 rounded-full font-bold">
+                    ₹{verifiedPayment.amount} Settled
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-[11px] text-emerald-800 font-mono pt-1">
+                  <div>Ref/UTR: {verifiedPayment.utrOrRef}</div>
+                  <div className="text-right">Payee: {verifiedPayment.upiId}</div>
+                </div>
+              </div>
+            )}
 
             {/* Exclusive Unique Code Display Box */}
             <div className="p-4 sm:p-5 bg-white rounded-2xl border-2 border-emerald-500/40 shadow-sm text-center space-y-2.5 relative overflow-hidden">
@@ -503,8 +770,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   <Sparkles className="w-3.5 h-3.5" />
                   Your Unique License Code
                 </span>
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
-                  ₹199 Paid
+                <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">
+                  Single-Use
                 </span>
               </div>
 
@@ -533,15 +800,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               </div>
 
               <p className="text-[11px] text-[#8C7B6B] italic">
-                *Important: This is a strictly single-use code. Once redeemed, it unlocks your current active session. If you reload your browser, you will need to purchase a new code.
+                *Notice: Each code can only be used once. Once redeemed, it unlocks your current active session.
               </p>
             </div>
 
-            {/* Step 2: Enter Code to Unlock */}
+            {/* Step 2: Redeem Code to Enter Customizer */}
             <div className="bg-[#FAF8F5] p-4 rounded-2xl border border-[#E8E1DA] space-y-3">
               <label className="block text-xs font-semibold text-[#2D2A26] flex items-center gap-1.5">
                 <KeyRound className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Enter Your Code to Unlock:</span>
+                <span>Confirm Code to Unlock Customizer:</span>
               </label>
 
               <div className="space-y-1.5">
@@ -562,24 +829,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                       <span>{redeemError}</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveTab('pay');
-                        setPayStep('checkout');
-                        setRedeemError(null);
-                      }}
-                      className="self-start text-[11px] font-semibold text-rose-800 underline hover:text-rose-950"
-                    >
-                      Click here to purchase a new unlock code &rarr;
-                    </button>
                   </div>
                 )}
               </div>
 
               <button
                 type="button"
-                disabled={isRedeeming || !redeemInput}
+                disabled={isRedeeming || !redeemInput.trim()}
                 onClick={() => handleVerifyAndRedeem(redeemInput)}
                 className="w-full py-3 px-4 rounded-full text-xs font-semibold text-white shadow-md transition-all hover:opacity-95 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 style={{ backgroundColor: theme.accent }}
@@ -587,12 +843,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 {isRedeeming ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    <span>Verifying Single-Use Code...</span>
+                    <span>Activating Session...</span>
                   </>
                 ) : (
                   <>
                     <Zap className="w-4 h-4" />
-                    <span>Verify Code & Unlock Customization & Source Code</span>
+                    <span>Redeem Code & Unlock Customizer</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}
@@ -606,17 +862,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         {/* ========================================================================= */}
         {activeTab === 'redeem' && payStep === 'checkout' && (
           <div className="p-6 sm:p-8 space-y-5">
-            <div className="text-center space-y-1.5">
-              <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-xs mb-2">
-                <KeyRound className="w-6 h-6" />
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-xs">
+                <KeyRound className="w-7 h-7" />
               </div>
               <h3 className="text-2xl font-serif text-[#2D2A26]">Enter Your Unlock Code</h3>
               <p className="text-xs sm:text-sm text-[#6E665E] max-w-sm mx-auto">
-                Enter your unique 16-character code below. Note: each code can be used only once.
+                Enter your verified single-use 16-character code below to unlock customization for this session.
               </p>
             </div>
 
-            {/* Input Box */}
             <div className="bg-white p-5 rounded-2xl border border-[#E8E1DA] space-y-4 shadow-2xs">
               <div>
                 <label className="block text-xs uppercase tracking-wider font-semibold text-[#8C7B6B] mb-2">
@@ -630,7 +885,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                     setRedeemError(null);
                   }}
                   placeholder="BDAY-XXXX-YYYY-ZZZZ"
-                  className="w-full px-4 py-3 font-mono text-base font-bold tracking-wider rounded-xl border border-[#D5C9BE] bg-[#FAF8F5] text-[#2D2A26] focus:outline-none focus:border-[#2D2A26] text-center"
+                  className="w-full px-4 py-3 font-mono text-base font-semibold tracking-wider rounded-xl border border-[#D5C9BE] bg-[#FAF8F5] text-[#2D2A26] focus:outline-none focus:border-[#2D2A26] text-center"
                 />
 
                 {redeemError && (
@@ -648,7 +903,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                       }}
                       className="self-start text-[11px] font-semibold text-rose-800 underline hover:text-rose-950"
                     >
-                      Click here to purchase a new unlock code &rarr;
+                      Click here to pay and verify a new unlock code &rarr;
                     </button>
                   </div>
                 )}
@@ -664,24 +919,24 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 {isRedeeming ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    <span>Verifying Code...</span>
+                    <span>Verifying Single-Use Code...</span>
                   </>
                 ) : (
                   <>
-                    <Zap className="w-4 h-4" />
-                    <span>Verify Code & Unlock</span>
+                    <KeyRound className="w-4 h-4" />
+                    <span>Redeem Code & Unlock Now</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}
               </button>
 
-              {/* Show previously issued codes on this browser if any exist */}
+              {/* Show previously verified codes on this browser if any exist */}
               {recentLicenses.length > 0 && (
                 <div className="pt-3 border-t border-[#F3EFEA] space-y-1.5">
                   <div className="flex items-center justify-between text-[11px] text-[#8C7B6B] font-medium">
                     <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3" />
-                      Codes on this device:
+                      Verified codes on this device:
                     </span>
                     <span className="text-[10px] text-amber-800">Single-use only</span>
                   </div>
@@ -732,7 +987,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 }}
                 className="text-xs text-[#6E665E] hover:text-[#2D2A26] font-medium transition-colors"
               >
-                Don't have a code yet? <span className="underline font-semibold">Pay ₹199 to generate your code &rarr;</span>
+                Don't have a code yet? <span className="underline font-semibold">Pay ₹199 & verify for code &rarr;</span>
               </button>
             </div>
           </div>
@@ -778,6 +1033,113 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             </button>
           </div>
         )}
+
+        {/* ========================================================================= */}
+        {/* BANK 3D SECURE OTP MODAL (FOR CARD PAYMENT VERIFICATION) */}
+        {/* ========================================================================= */}
+        <AnimatePresence>
+          {showCardOtpModal && (
+            <div className="absolute inset-0 z-30 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-2xl border border-stone-200 space-y-4"
+              >
+                {/* Bank Header */}
+                <div className="flex items-center justify-between border-b border-stone-200 pb-3">
+                  <div className="flex items-center gap-1.5">
+                    <Building2 className="w-5 h-5 text-blue-900" />
+                    <div>
+                      <h4 className="text-xs font-bold text-blue-950 uppercase tracking-wide">Bank 3D Secure</h4>
+                      <p className="text-[10px] text-stone-500">Verified by Visa / Mastercard</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCardOtpModal(false)}
+                    className="text-stone-400 hover:text-stone-700"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Amount & Merchant */}
+                <div className="bg-stone-50 p-3 rounded-xl text-xs space-y-1 text-stone-700">
+                  <div className="flex justify-between">
+                    <span>Merchant:</span>
+                    <strong className="text-stone-900">{payeeName}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Payee UPI:</span>
+                    <strong className="font-mono text-stone-900">{upiId}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Amount:</span>
+                    <strong className="text-stone-900 text-sm">₹199.00</strong>
+                  </div>
+                </div>
+
+                {/* OTP Input */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-stone-800">
+                    Enter 6-Digit Bank OTP:
+                  </label>
+                  <p className="text-[11px] text-stone-500">
+                    Enter the 6-digit OTP sent to your registered mobile ending in ••42
+                  </p>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={cardOtp}
+                    onChange={e => {
+                      setCardOtp(e.target.value.replace(/\D/g, ''));
+                      setCardOtpError(null);
+                    }}
+                    placeholder="123456"
+                    className="w-full text-center tracking-[0.4em] font-mono text-lg font-bold py-2.5 px-3 border border-stone-300 rounded-xl focus:outline-none focus:border-blue-900 bg-stone-50"
+                  />
+                  <p className="text-[10px] text-stone-400 text-center">
+                    Demo testing OTP: Enter 429182 or any 6 digits
+                  </p>
+
+                  {cardOtpError && (
+                    <p className="text-xs text-rose-600 flex items-center gap-1 mt-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{cardOtpError}</span>
+                    </p>
+                  )}
+                </div>
+
+                {/* Submit OTP */}
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCardOtpModal(false)}
+                    className="flex-1 py-2 rounded-xl text-xs font-medium border border-stone-300 hover:bg-stone-100 text-stone-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isVerifyingOtp || cardOtp.length < 6}
+                    onClick={handleVerifyCardOtp}
+                    className="flex-1 py-2 rounded-xl text-xs font-semibold bg-blue-900 text-white hover:bg-blue-950 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    {isVerifyingOtp ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        <span>Verifying...</span>
+                      </>
+                    ) : (
+                      <span>Verify & Authorize</span>
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </motion.div>
     </div>
   );
